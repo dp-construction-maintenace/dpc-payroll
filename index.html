@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DP Construction Group — Payroll &amp; HR System</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<style>
+  :root{
+    --charcoal:#1C1F24;
+    --charcoal-2:#262B32;
+    --steel:#2B4C6F;
+    --safety:#F2B705;
+    --safety-dark:#C99400;
+    --concrete:#EEEBE4;
+    --concrete-dark:#DAD5C9;
+    --paper:#FFFFFF;
+    --ink:#1C1F24;
+    --ink-soft:#5B6470;
+    --ok:#2E7D46;
+    --danger:#B3261E;
+    --line:#D8D2C4;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--concrete);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,.display{
+    font-family:'Oswald',sans-serif;
+    text-transform:uppercase;
+    letter-spacing:0.03em;
+  }
+  .mono{font-family:'JetBrains Mono',monospace;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:#c9c2b0;border-radius:6px;}
+
+  /* App shell */
+  #app{display:flex;min-height:100vh;}
+  #sidebar{
+    width:230px;flex-shrink:0;background:var(--charcoal);
+    color:#F4F1E9;display:flex;flex-direction:column;
+    background-image:
+      linear-gradient(180deg, rgba(242,183,5,0.06), transparent 200px);
+  }
+  #sidebar .brand{
+    padding:22px 18px 14px;border-bottom:1px solid rgba(255,255,255,0.08);
+  }
+  #sidebar .brand .tag{
+    display:inline-block;background:var(--safety);color:#1C1F24;
+    font-family:'Oswald',sans-serif;font-weight:700;font-size:11px;
+    letter-spacing:0.08em;padding:3px 7px;border-radius:3px;margin-bottom:8px;
+  }
+  #sidebar .brand h1{font-size:17px;margin:0;line-height:1.25;color:#fff;}
+  #sidebar .brand .sub{font-size:11px;color:#9AA3AE;margin-top:4px;letter-spacing:0.04em;}
+  #nav{padding:14px 10px;flex:1;overflow-y:auto;}
+  .navbtn{
+    display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+    background:transparent;border:none;color:#C9CDD3;padding:10px 12px;
+    border-radius:8px;font-size:13px;font-family:'Oswald',sans-serif;
+    letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;margin-bottom:2px;
+  }
+  .navbtn:hover{background:rgba(255,255,255,0.06);color:#fff;}
+  .navbtn.active{background:var(--safety);color:#1C1F24;font-weight:600;}
+  .navbtn .dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:0.5;flex-shrink:0;}
+  #sidebar .foot{padding:14px 18px;border-top:1px solid rgba(255,255,255,0.08);font-size:11px;color:#7c8792;}
+  #sidebar .foot button{
+    background:none;border:1px solid rgba(255,255,255,0.2);color:#C9CDD3;
+    padding:6px 10px;border-radius:6px;font-size:11px;cursor:pointer;width:100%;margin-top:8px;
+  }
+  #main{flex:1;min-width:0;display:flex;flex-direction:column;}
+  #topbar{
+    background:var(--paper);border-bottom:1px solid var(--line);
+    padding:14px 26px;display:flex;align-items:center;justify-content:space-between;
+  }
+  #topbar h2{font-size:18px;margin:0;}
+  #topbar .meta{font-size:12px;color:var(--ink-soft);}
+  #view{padding:24px 26px 60px;flex:1;}
+
+  /* Cards / tables */
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:18px;}
+  .card h3{font-size:14px;margin:0 0 14px;color:var(--ink);border-bottom:2px solid var(--safety);display:inline-block;padding-bottom:4px;}
+  .grid{display:grid;gap:16px;}
+  .grid.cols-2{grid-template-columns:repeat(2,1fr);}
+  .grid.cols-3{grid-template-columns:repeat(3,1fr);}
+  .grid.cols-4{grid-template-columns:repeat(4,1fr);}
+  @media (max-width:900px){.grid.cols-2,.grid.cols-3,.grid.cols-4{grid-template-columns:1fr;}}
+
+  .stat{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px 18px;position:relative;overflow:hidden;}
+  .stat:before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--safety);}
+  .stat .label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink-soft);font-family:'Oswald',sans-serif;}
+  .stat .value{font-size:26px;font-weight:600;margin-top:4px;font-family:'Oswald',sans-serif;}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{
+    text-align:left;font-family:'Oswald',sans-serif;font-size:11px;letter-spacing:0.05em;
+    text-transform:uppercase;color:var(--ink-soft);border-bottom:2px solid var(--line);padding:8px 10px;
+    background:#FAF8F3;
+  }
+  td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle;}
+  tr:hover td{background:#FCFAF5;}
+  .num{font-family:'JetBrains Mono',monospace;text-align:right;}
+
+  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:var(--ink-soft);margin-bottom:5px;font-family:'Oswald',sans-serif;}
+  input,select,textarea{
+    width:100%;padding:9px 10px;border:1px solid #C9C2AF;border-radius:6px;background:#fff;
+    font-family:'Inter',sans-serif;font-size:13px;color:var(--ink);
+  }
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--safety);border-color:var(--safety-dark);}
+  .field{margin-bottom:12px;}
+  .btn{
+    display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:7px;border:none;
+    font-family:'Oswald',sans-serif;font-size:12.5px;letter-spacing:0.04em;text-transform:uppercase;
+    cursor:pointer;font-weight:600;
+  }
+  .btn-primary{background:var(--safety);color:#1C1F24;}
+  .btn-primary:hover{background:var(--safety-dark);}
+  .btn-dark{background:var(--charcoal);color:#fff;}
+  .btn-dark:hover{background:#000;}
+  .btn-outline{background:transparent;border:1px solid #C9C2AF;color:var(--ink);}
+  .btn-outline:hover{background:#F1ECE0;}
+  .btn-danger{background:#fff;border:1px solid var(--danger);color:var(--danger);}
+  .btn-danger:hover{background:var(--danger);color:#fff;}
+  .btn-sm{padding:5px 10px;font-size:11px;border-radius:5px;}
+  .btn:disabled{opacity:0.5;cursor:not-allowed;}
+
+  .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;font-family:'Oswald',sans-serif;text-transform:uppercase;letter-spacing:0.03em;}
+  .pill-ok{background:#E4F2E7;color:var(--ok);}
+  .pill-warn{background:#FCF1D6;color:#8A6300;}
+  .pill-danger{background:#FBE7E5;color:var(--danger);}
+  .pill-steel{background:#E4EBF2;color:var(--steel);}
+
+  .modal-bg{position:fixed;inset:0;background:rgba(20,20,20,0.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px;}
+  .modal{background:#fff;border-radius:12px;padding:22px 24px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;}
+  .modal h3{margin-top:0;}
+  .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;}
+
+  .hidden{display:none !important;}
+  .toast-wrap{position:fixed;bottom:22px;right:22px;z-index:80;display:flex;flex-direction:column;gap:8px;}
+  .toast{background:var(--charcoal);color:#fff;padding:11px 16px;border-radius:8px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,0.25);border-left:4px solid var(--safety);}
+  .toast.err{border-left-color:var(--danger);}
+
+  /* Login */
+  #login-screen{
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(242,183,5,0.12), transparent 45%),
+      var(--charcoal);
+  }
+  .login-card{background:#fff;border-radius:12px;padding:34px 32px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,0.4);}
+  .login-card .tag{display:inline-block;background:var(--safety);color:#1C1F24;font-family:'Oswald',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.08em;padding:3px 8px;border-radius:3px;margin-bottom:10px;}
+
+  /* Payslip */
+  .payslip{
+    background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    max-width:820px;margin:0 auto;
+  }
+  .payslip-head{
+    background:var(--charcoal);color:#fff;padding:20px 26px;display:flex;justify-content:space-between;align-items:flex-start;
+    border-bottom:5px solid var(--safety);
+  }
+  .payslip-head .co-name{font-family:'Oswald',sans-serif;font-size:20px;letter-spacing:0.03em;}
+  .payslip-head .co-sub{font-size:11px;color:#B7C0CA;margin-top:3px;}
+  .payslip-head .logo{max-height:52px;max-width:130px;object-fit:contain;background:#fff;padding:4px;border-radius:4px;}
+  .payslip-head .num{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--safety);text-align:right;}
+  .payslip-body{padding:22px 26px;}
+  .payslip-section{margin-bottom:16px;}
+  .payslip-section h4{font-family:'Oswald',sans-serif;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-soft);border-bottom:1px solid var(--line);padding-bottom:5px;margin-bottom:8px;}
+  .payslip-row{display:flex;justify-content:space-between;padding:4px 0;font-size:13.5px;}
+  .payslip-row.total{border-top:1px solid var(--line);margin-top:6px;padding-top:8px;font-weight:700;}
+  .payslip-net{
+    background:var(--charcoal);color:#fff;border-radius:8px;padding:16px 20px;
+    display:flex;justify-content:space-between;align-items:center;margin-top:18px;
+  }
+  .payslip-net .label{font-family:'Oswald',sans-serif;font-size:13px;letter-spacing:0.05em;text-transform:uppercase;color:#B7C0CA;}
+  .payslip-net .amt{font-family:'Oswald',sans-serif;font-size:26px;color:var(--safety);}
+  .payslip-stub{border-top:2px dashed var(--line);display:flex;justify-content:space-between;align-items:center;padding:16px 26px;background:#FAF8F3;}
+  .payslip-stub .qr{background:#fff;padding:6px;border-radius:6px;border:1px solid var(--line);}
+
+  @media print{
+    #sidebar,#topbar,.no-print{display:none !important;}
+    #view{padding:0;}
+    body{background:#fff;}
+    .payslip{border:none;}
+  }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <div class="login-card">
+    <span class="tag">DP CONSTRUCTION GROUP</span>
+    <h1 style="font-size:20px;margin:2px 0 6px;">Payroll &amp; HR System</h1>
+    <p style="font-size:13px;color:var(--ink-soft);margin-top:0;margin-bottom:20px;">Sign in to manage employees, timesheets, leave and payroll.</p>
+    <div class="field">
+      <label>Email</label>
+      <input id="login-email" type="email" placeholder="you@dpconstruction.co.za" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div id="login-error" style="color:var(--danger);font-size:12.5px;margin-bottom:10px;display:none;"></div>
+    <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="Auth.login()">Sign In</button>
+    <p style="font-size:11px;color:var(--ink-soft);margin-top:16px;line-height:1.5;">
+      No account yet? Create a user under <strong>Firebase Console → Authentication → Users</strong>.
+      See README.md for full setup steps.
+    </p>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <div id="sidebar">
+    <div class="brand">
+      <span class="tag">DPC PAYROLL</span>
+      <h1 id="brand-name">DP Construction Group</h1>
+      <div class="sub">HR &amp; Payroll System</div>
+    </div>
+    <div id="nav"></div>
+    <div class="foot">
+      Signed in as<br><strong id="user-email" style="color:#D9DCE1;"></strong>
+      <button onclick="Auth.logout()">Sign Out</button>
+    </div>
+  </div>
+  <div id="main">
+    <div id="topbar">
+      <h2 id="view-title">Dashboard</h2>
+      <div class="meta" id="view-meta"></div>
+    </div>
+    <div id="view"></div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+<div id="modal-root"></div>
+
+<script src="firebase-config.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
