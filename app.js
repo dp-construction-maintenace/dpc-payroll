@@ -32,6 +32,55 @@ function monthLabel(period){
   const d = new Date(Number(y), Number(m)-1, 1);
   return d.toLocaleDateString('en-ZA', {month:'long', year:'numeric'});
 }
+function fmtDate(iso){
+  if(!iso) return "";
+  const d = new Date(iso+"T00:00:00");
+  return d.toLocaleDateString('en-ZA', {day:'numeric', month:'short', year:'numeric'});
+}
+
+// ------------------------------------------------------------
+// Pay periods — supports Monthly (calendar month) and Fortnightly
+// (any 14-day run you pick) pay cycles. A period is identified by a
+// string: "YYYY-MM" for monthly, or "FN-YYYY-MM-DD" (start date) for
+// fortnightly. This lets directors/casual staff be paid every two
+// weeks for days worked, while salaried staff (e.g. the bookkeeper)
+// stay on a monthly cycle.
+// ------------------------------------------------------------
+const PERIODS_PER_YEAR = { monthly:12, fortnightly:26 };
+const Period = {
+  currentMonthly(){ return currentPeriod(); },
+  defaultFortnightStart(){
+    // Sensible default: the 1st of the current month. The user can
+    // change this to whatever date their actual fortnight cycle starts on.
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0,10);
+  },
+  fortnightEndFromStart(startISO){
+    const d = new Date(startISO+"T00:00:00");
+    d.setDate(d.getDate()+13);
+    return d.toISOString().slice(0,10);
+  },
+  idFor(frequency, opts){
+    if(frequency==='fortnightly') return `FN-${opts.start}`;
+    return opts.month;
+  },
+  frequencyOf(periodId){ return (periodId||'').startsWith('FN-') ? 'fortnightly' : 'monthly'; },
+  startOf(periodId){ return this.frequencyOf(periodId)==='fortnightly' ? periodId.slice(3) : `${periodId}-01`; },
+  label(periodId){
+    if(!periodId) return "";
+    if(this.frequencyOf(periodId)==='fortnightly'){
+      const start = periodId.slice(3);
+      const end = this.fortnightEndFromStart(start);
+      return `${fmtDate(start)} – ${fmtDate(end)} (Fortnight)`;
+    }
+    return monthLabel(periodId);
+  },
+  currentFor(emp){
+    return (emp.payFrequency==='fortnightly')
+      ? this.idFor('fortnightly', {start: this.defaultFortnightStart()})
+      : this.idFor('monthly', {month: this.currentMonthly()});
+  }
+};
 
 function toast(msg, isErr=false){
   const wrap = $("#toast-wrap");
@@ -51,60 +100,30 @@ function closeModal(){ $("#modal-root").innerHTML = ""; }
 window.closeModal = closeModal;
 
 // ------------------------------------------------------------
-// Payroll math — SARS 2026/2027 tax year (1 Mar 2026 – 28 Feb 2027)
-// This is a simplified, good-faith estimate for small-business use.
-// Always reconcile against SARS's official tax deduction tables
-// and check with your accountant/tax practitioner before filing.
+// Payroll math note: this system does NOT calculate PAYE or UIF.
+// Gross pay minus any "Other Deductions" you enter on the timesheet
+// equals net pay. Add PAYE/UIF (or any other statutory deductions)
+// back in later if needed — just ask.
 // ------------------------------------------------------------
-const TAX_YEAR_LABEL = "2026/2027 tax year (1 Mar 2026 – 28 Feb 2027)";
-const BRACKETS = [
-  {upTo:245100,    rate:0.18, base:0},
-  {upTo:383100,    rate:0.26, base:44118},
-  {upTo:530200,    rate:0.31, base:79998},
-  {upTo:695800,    rate:0.36, base:125599},
-  {upTo:887000,    rate:0.39, base:185215},
-  {upTo:1878600,   rate:0.41, base:259783},
-  {upTo:Infinity,  rate:0.45, base:666339},
-];
-const BRACKET_FLOORS = [0,245100,383100,530200,695800,887000,1878600];
-const REBATES = { under65:17820, age65to74:27585, age75plus:30834 };
-const UIF_CEILING_MONTHLY = 17712;
-const UIF_RATE = 0.01;
-const UIF_MAX_MONTHLY = 177.12;
 
-function annualTax(annualTaxable){
-  if(annualTaxable <= 0) return 0;
-  for(let i=0;i<BRACKETS.length;i++){
-    if(annualTaxable <= BRACKETS[i].upTo){
-      return BRACKETS[i].base + BRACKETS[i].rate * (annualTaxable - BRACKET_FLOORS[i]);
-    }
-  }
-  return 0;
-}
-function calcMonthlyPAYE(monthlyGross, ageBand='under65'){
-  const annual = Math.max(0, monthlyGross) * 12;
-  const tax = annualTax(annual);
-  const rebate = REBATES[ageBand] ?? REBATES.under65;
-  const annualPAYE = Math.max(0, tax - rebate);
-  return Math.round((annualPAYE/12) * 100) / 100;
-}
-function calcUIF(monthlyGross){
-  const capped = Math.min(Math.max(0,monthlyGross), UIF_CEILING_MONTHLY);
-  return Math.round(Math.min(capped*UIF_RATE, UIF_MAX_MONTHLY) * 100) / 100;
-}
-
-function computeEarnings(emp, ts){
+function computeEarnings(emp, ts, frequency='monthly'){
   ts = ts || {};
   let normalPay=0, otPay=0, sundayPay=0, unpaidDeduction=0;
   const overtimeHours = Number(ts.overtimeHours)||0;
   const sundayHours = Number(ts.sundayHours)||0;
+  // Standard working days/hours assumed per period, used only to convert a
+  // fixed salary into an hourly-equivalent rate for overtime/unpaid-leave math.
+  const workDaysInPeriod = frequency==='fortnightly' ? 10 : 21.67;
 
   if(emp.payType === 'monthly'){
-    normalPay = Number(emp.rate)||0;
+    // A fixed salary paid out per period: full amount if paid monthly,
+    // or half the monthly rate if this employee is on a fortnightly cycle.
+    const periodSalary = frequency==='fortnightly' ? (Number(emp.rate)||0)/2 : (Number(emp.rate)||0);
+    normalPay = periodSalary;
     const unpaidDays = Number(ts.unpaidLeaveDays)||0;
-    const dailyEquiv = normalPay/21.67;
+    const dailyEquiv = periodSalary/workDaysInPeriod;
     unpaidDeduction = dailyEquiv*unpaidDays;
-    const hourlyEquiv = normalPay/(21.67*9);
+    const hourlyEquiv = periodSalary/(workDaysInPeriod*9);
     otPay = overtimeHours*hourlyEquiv*1.5;
     sundayPay = sundayHours*hourlyEquiv*2;
   } else if(emp.payType === 'daily'){
@@ -217,7 +236,6 @@ const NAV_ITEMS = [
   {id:"dashboard", label:"Dashboard"},
   {id:"employees", label:"Employees"},
   {id:"timesheets", label:"Timesheets"},
-  {id:"leave", label:"Leave Register"},
   {id:"payroll", label:"Run Payroll"},
   {id:"payslips", label:"Payslips"},
   {id:"reports", label:"Payroll Summary"},
@@ -249,7 +267,6 @@ const Router = {
       if(id==="dashboard") await Dashboard.render();
       else if(id==="employees") await Employees.render();
       else if(id==="timesheets") await Timesheets.render();
-      else if(id==="leave") await Leave.render();
       else if(id==="payroll") await Payroll.render();
       else if(id==="payslips") await Payslips.render();
       else if(id==="reports") await Reports.render();
@@ -266,21 +283,24 @@ const Router = {
 // ------------------------------------------------------------
 const Dashboard = {
   async render(){
-    const period = currentPeriod();
+    const monthPeriod = Period.currentMonthly();
     const employees = State.employees;
     const active = employees.filter(e=>e.active!==false);
+    const monthlyStaff = active.filter(e=>(e.payFrequency||'monthly')==='monthly');
+    const fortnightlyStaff = active.filter(e=>e.payFrequency==='fortnightly');
+
     let payslipsThisMonth = [];
     try{
-      const q = query(col("payslips"), where("period","==",period));
+      const q = query(col("payslips"), where("period","==",monthPeriod));
       payslipsThisMonth = (await getDocs(q)).docs.map(d=>d.data());
-    }catch(e){/* index might not exist yet on first run */ payslipsThisMonth=[]; }
+    }catch(e){ payslipsThisMonth=[]; }
     const totalNet = payslipsThisMonth.reduce((s,p)=>s+(p.netPay||0),0);
     const totalGross = payslipsThisMonth.reduce((s,p)=>s+(p.earnings?.gross||0),0);
 
     view().innerHTML = `
       <div class="grid cols-4">
         <div class="stat"><div class="label">Active Employees</div><div class="value">${active.length}</div></div>
-        <div class="stat"><div class="label">Payslips — ${esc(monthLabel(period))}</div><div class="value">${payslipsThisMonth.length}</div></div>
+        <div class="stat"><div class="label">Payslips — ${esc(monthLabel(monthPeriod))}</div><div class="value">${payslipsThisMonth.length}</div></div>
         <div class="stat"><div class="label">Gross Payroll (MTD)</div><div class="value" style="font-size:20px;">${R(totalGross)}</div></div>
         <div class="stat"><div class="label">Net Payroll (MTD)</div><div class="value" style="font-size:20px;">${R(totalNet)}</div></div>
       </div>
@@ -290,26 +310,42 @@ const Dashboard = {
           <div style="display:flex;flex-direction:column;gap:10px;margin-top:6px;">
             <button class="btn btn-primary" data-nav="employees">+ Add Employee</button>
             <button class="btn btn-dark" data-nav="timesheets">Capture Timesheets</button>
-            <button class="btn btn-outline" data-nav="payroll">Run Payroll for ${esc(monthLabel(period))}</button>
+            <button class="btn btn-outline" data-nav="payroll">Run Payroll</button>
           </div>
+          <p style="font-size:12px;color:var(--ink-soft);margin-top:12px;">
+            Directors &amp; casual staff run on a <strong>fortnightly</strong> cycle; salaried staff (e.g. the bookkeeper)
+            run <strong>monthly</strong> — pick the right tab in Timesheets/Payroll for each.
+          </p>
         </div>
         <div class="card">
-          <h3>Employees Missing This Month's Timesheet</h3>
-          <div id="missing-ts">Checking…</div>
+          <h3>Missing Timesheets — This Cycle</h3>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-soft);font-family:'Oswald',sans-serif;margin-bottom:4px;">Monthly staff</div>
+          <div id="missing-monthly" style="margin-bottom:12px;">Checking…</div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-soft);font-family:'Oswald',sans-serif;margin-bottom:4px;">Fortnightly staff</div>
+          <div id="missing-fortnightly">Checking…</div>
         </div>
       </div>
     `;
     $$("[data-nav]", view()).forEach(b=>b.addEventListener("click", ()=>Router.go(b.dataset.nav)));
 
-    // Missing timesheets check
-    const missing = [];
-    for(const emp of active){
-      const snap = await getDoc(doc(db,"timesheets", `${emp.id}_${period}`));
-      if(!snap.exists()) missing.push(emp);
+    async function missingFor(list, periodId){
+      const missing = [];
+      for(const emp of list){
+        const snap = await getDoc(doc(db,"timesheets", `${emp.id}_${periodId}`));
+        if(!snap.exists()) missing.push(emp);
+      }
+      return missing;
     }
-    $("#missing-ts").innerHTML = missing.length===0
-      ? `<p class="pill pill-ok">All caught up ✓</p>`
-      : missing.map(e=>`<span class="pill pill-warn" style="margin:2px 4px 2px 0;">${esc(e.name)}</span>`).join("");
+    const missingMonthly = await missingFor(monthlyStaff, monthPeriod);
+    $("#missing-monthly").innerHTML = monthlyStaff.length===0 ? `<span style="font-size:12px;color:var(--ink-soft);">No monthly staff yet.</span>`
+      : missingMonthly.length===0 ? `<p class="pill pill-ok">All caught up ✓</p>`
+      : missingMonthly.map(e=>`<span class="pill pill-warn" style="margin:2px 4px 2px 0;">${esc(e.name)}</span>`).join("");
+
+    const fnPeriod = Period.idFor('fortnightly', {start: Period.defaultFortnightStart()});
+    const missingFortnightly = await missingFor(fortnightlyStaff, fnPeriod);
+    $("#missing-fortnightly").innerHTML = fortnightlyStaff.length===0 ? `<span style="font-size:12px;color:var(--ink-soft);">No fortnightly staff yet.</span>`
+      : missingFortnightly.length===0 ? `<p class="pill pill-ok">All caught up ✓</p>`
+      : missingFortnightly.map(e=>`<span class="pill pill-warn" style="margin:2px 4px 2px 0;">${esc(e.name)}</span>`).join("");
   }
 };
 
@@ -328,7 +364,7 @@ const Employees = {
         </div>
         <table>
           <thead><tr>
-            <th>Emp No.</th><th>Name</th><th>Position</th><th>Pay Type</th><th class="num">Rate</th>
+            <th>Emp No.</th><th>Name</th><th>Position</th><th>Pay Type</th><th>Pay Frequency</th><th class="num">Rate</th>
             <th>Status</th><th></th>
           </tr></thead>
           <tbody>
@@ -338,13 +374,14 @@ const Employees = {
                 <td>${esc(e.name)}</td>
                 <td>${esc(e.position||'—')}</td>
                 <td><span class="pill pill-steel">${esc(e.payType)}</span></td>
+                <td><span class="pill ${e.payFrequency==='fortnightly'?'pill-warn':'pill-steel'}">${e.payFrequency==='fortnightly'?'Fortnightly':'Monthly'}</span></td>
                 <td class="num">${R(e.rate)}${e.payType==='hourly'?'/hr':e.payType==='daily'?'/day':'/mo'}</td>
                 <td>${e.active===false ? '<span class="pill pill-danger">Inactive</span>' : '<span class="pill pill-ok">Active</span>'}</td>
                 <td style="text-align:right;">
                   <button class="btn btn-outline btn-sm" data-edit="${e.id}">Edit</button>
                 </td>
               </tr>
-            `).join('') || `<tr><td colspan="7" style="text-align:center;color:var(--ink-soft);padding:24px;">No employees yet — add your first one.</td></tr>`}
+            `).join('') || `<tr><td colspan="8" style="text-align:center;color:var(--ink-soft);padding:24px;">No employees yet — add your first one.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -354,7 +391,6 @@ const Employees = {
   },
   async openForm(id){
     const emp = id ? empById(id) : null;
-    const lb = emp?.leaveBalances || {annual:15, sick:10, familyResponsibility:3};
     openModal(`
       <h3>${emp ? 'Edit Employee' : 'Add Employee'}</h3>
       <div class="grid cols-2">
@@ -372,11 +408,10 @@ const Employees = {
         </div>
         <div class="field"><label>Rate (R)</label><input type="number" step="0.01" id="f-rate" value="${emp?.rate||''}"></div>
         <div class="field">
-          <label>Age Band (for tax rebate)</label>
-          <select id="f-age">
-            <option value="under65" ${(!emp||emp.ageBand==='under65')?'selected':''}>Under 65</option>
-            <option value="age65to74" ${emp?.ageBand==='age65to74'?'selected':''}>65–74</option>
-            <option value="age75plus" ${emp?.ageBand==='age75plus'?'selected':''}>75+</option>
+          <label>Pay Frequency</label>
+          <select id="f-payfreq">
+            <option value="monthly" ${(!emp||emp.payFrequency!=='fortnightly')?'selected':''}>Monthly</option>
+            <option value="fortnightly" ${emp?.payFrequency==='fortnightly'?'selected':''}>Fortnightly (every 2 weeks)</option>
           </select>
         </div>
         <div class="field">
@@ -394,12 +429,6 @@ const Employees = {
         <div class="field"><label>Account Number</label><input id="f-acctno" value="${esc(emp?.bankAccountNo)}"></div>
         <div class="field"><label>Branch Code</label><input id="f-branch" value="${esc(emp?.branchCode)}"></div>
       </div>
-      <h3 style="margin-top:18px;">Leave Balances (days)</h3>
-      <div class="grid cols-3">
-        <div class="field"><label>Annual</label><input type="number" step="0.5" id="f-lv-annual" value="${lb.annual}"></div>
-        <div class="field"><label>Sick</label><input type="number" step="0.5" id="f-lv-sick" value="${lb.sick}"></div>
-        <div class="field"><label>Family Resp.</label><input type="number" step="0.5" id="f-lv-fr" value="${lb.familyResponsibility}"></div>
-      </div>
       <div class="modal-actions">
         ${emp ? `<button class="btn btn-danger" id="del-emp">Delete</button>` : ``}
         <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -414,17 +443,12 @@ const Employees = {
         startDate: $("#f-start").value,
         payType: $("#f-paytype").value,
         rate: Number($("#f-rate").value)||0,
-        ageBand: $("#f-age").value,
+        payFrequency: $("#f-payfreq").value,
         active: $("#f-active").value === "true",
         bankName: $("#f-bank").value.trim(),
         accountType: $("#f-accttype").value.trim(),
         bankAccountNo: $("#f-acctno").value.trim(),
         branchCode: $("#f-branch").value.trim(),
-        leaveBalances: {
-          annual: Number($("#f-lv-annual").value)||0,
-          sick: Number($("#f-lv-sick").value)||0,
-          familyResponsibility: Number($("#f-lv-fr").value)||0,
-        }
       };
       if(!data.name){ toast("Please enter a name.", true); return; }
       try{
@@ -457,10 +481,18 @@ window.Employees = Employees;
 // TIMESHEETS
 // ------------------------------------------------------------
 const Timesheets = {
-  period: currentPeriod(),
+  mode: 'fortnightly', // 'fortnightly' | 'monthly' — which staff group we're looking at
+  monthPeriod: currentPeriod(),
+  fortnightStart: null,
+  get period(){
+    return this.mode==='fortnightly'
+      ? Period.idFor('fortnightly', {start: this.fortnightStart || Period.defaultFortnightStart()})
+      : Period.idFor('monthly', {month: this.monthPeriod});
+  },
   async render(){
+    if(!this.fortnightStart) this.fortnightStart = Period.defaultFortnightStart();
     await loadEmployees();
-    const active = State.employees.filter(e=>e.active!==false);
+    const active = State.employees.filter(e=>e.active!==false && (e.payFrequency||'monthly')===this.mode);
     const rows = [];
     for(const emp of active){
       const snap = await getDoc(doc(db,"timesheets", `${emp.id}_${this.period}`));
@@ -468,9 +500,18 @@ const Timesheets = {
     }
     view().innerHTML = `
       <div class="card">
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+          <button class="btn ${this.mode==='fortnightly'?'btn-primary':'btn-outline'} btn-sm" data-mode="fortnightly">Fortnightly Staff (directors &amp; casual)</button>
+          <button class="btn ${this.mode==='monthly'?'btn-primary':'btn-outline'} btn-sm" data-mode="monthly">Monthly Staff (salaried)</button>
+        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-          <h3 style="margin:0;">Timesheets — ${esc(monthLabel(this.period))}</h3>
-          <input type="month" id="ts-period" value="${this.period}" style="width:auto;">
+          <h3 style="margin:0;">Timesheets — ${esc(Period.label(this.period))}</h3>
+          ${this.mode==='fortnightly'
+            ? `<div style="display:flex;align-items:center;gap:8px;">
+                 <label style="margin:0;">Fortnight starts</label>
+                 <input type="date" id="ts-fn-start" value="${this.fortnightStart}" style="width:auto;">
+               </div>`
+            : `<input type="month" id="ts-period" value="${this.monthPeriod}" style="width:auto;">`}
         </div>
         <table>
           <thead><tr>
@@ -490,23 +531,29 @@ const Timesheets = {
                 <td>${ts ? '<span class="pill pill-ok">Captured</span>' : '<span class="pill pill-warn">Missing</span>'}</td>
                 <td style="text-align:right;"><button class="btn btn-outline btn-sm" data-ts="${emp.id}">${ts?'Edit':'Capture'}</button></td>
               </tr>
-            `).join('') || `<tr><td colspan="9" style="text-align:center;color:var(--ink-soft);padding:24px;">No active employees. Add employees first.</td></tr>`}
+            `).join('') || `<tr><td colspan="9" style="text-align:center;color:var(--ink-soft);padding:24px;">No active ${this.mode} employees. Add or update employees in the register first.</td></tr>`}
           </tbody>
         </table>
       </div>
     `;
-    $("#ts-period").addEventListener("change", (e)=>{ this.period = e.target.value; this.render(); });
+    $$("[data-mode]", view()).forEach(b=>b.addEventListener("click", ()=>{ this.mode=b.dataset.mode; this.render(); }));
+    if(this.mode==='fortnightly'){
+      $("#ts-fn-start").addEventListener("change", (e)=>{ this.fortnightStart=e.target.value; this.render(); });
+    } else {
+      $("#ts-period").addEventListener("change", (e)=>{ this.monthPeriod=e.target.value; this.render(); });
+    }
     $$("[data-ts]", view()).forEach(b=>b.addEventListener("click", ()=>this.openForm(b.dataset.ts)));
   },
   async openForm(empId){
     const emp = empById(empId);
-    const ref = doc(db,"timesheets", `${empId}_${this.period}`);
+    const periodId = this.period;
+    const ref = doc(db,"timesheets", `${empId}_${periodId}`);
     const snap = await getDoc(ref);
     const ts = snap.exists() ? snap.data() : {};
     const isHourly = emp.payType==='hourly', isDaily = emp.payType==='daily', isMonthly = emp.payType==='monthly';
     openModal(`
       <h3>Timesheet — ${esc(emp.name)}</h3>
-      <p style="font-size:12px;color:var(--ink-soft);margin-top:-8px;">${esc(monthLabel(this.period))} · ${esc(emp.payType)} @ ${R(emp.rate)}${isHourly?'/hr':isDaily?'/day':'/mo'}</p>
+      <p style="font-size:12px;color:var(--ink-soft);margin-top:-8px;">${esc(Period.label(periodId))} · ${esc(emp.payType)} @ ${R(emp.rate)}${isHourly?'/hr':isDaily?'/day':'/mo'}</p>
       <div class="grid cols-2">
         ${isDaily ? `<div class="field"><label>Days Worked</label><input type="number" step="0.5" id="ts-days" value="${ts.daysWorked??''}"></div>` :
           `<div class="field"><label>${isMonthly?'Normal Hours (info only)':'Normal Hours'}</label><input type="number" step="0.5" id="ts-hours" value="${ts.normalHours??''}"></div>`}
@@ -525,7 +572,7 @@ const Timesheets = {
     `);
     $("#save-ts").addEventListener("click", async ()=>{
       const data = {
-        employeeId: empId, period: this.period,
+        employeeId: empId, period: periodId,
         normalHours: isDaily?0:Number($("#ts-hours")?.value)||0,
         daysWorked: isDaily?Number($("#ts-days").value)||0:0,
         overtimeHours: Number($("#ts-ot").value)||0,
@@ -547,147 +594,55 @@ const Timesheets = {
 window.Timesheets = Timesheets;
 
 // ------------------------------------------------------------
-// LEAVE REGISTER
-// ------------------------------------------------------------
-const LEAVE_TYPES = {annual:"Annual", sick:"Sick", familyResponsibility:"Family Responsibility"};
-const Leave = {
-  async render(){
-    await loadEmployees();
-    const records = await getAllDocs("leave");
-    records.sort((a,b)=> (b.startDate||'').localeCompare(a.startDate||''));
-    view().innerHTML = `
-      <div class="grid cols-2">
-        ${State.employees.filter(e=>e.active!==false).map(e=>`
-          <div class="card" style="margin-bottom:0;">
-            <h3 style="border:none;">${esc(e.name)}</h3>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <span class="pill pill-steel">Annual: ${e.leaveBalances?.annual ?? 0}d</span>
-              <span class="pill pill-steel">Sick: ${e.leaveBalances?.sick ?? 0}d</span>
-              <span class="pill pill-steel">Family Resp: ${e.leaveBalances?.familyResponsibility ?? 0}d</span>
-            </div>
-          </div>
-        `).join('') || `<div class="card">No active employees yet.</div>`}
-      </div>
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-          <h3 style="margin:0;">Leave Records</h3>
-          <button class="btn btn-primary" id="add-leave">+ Capture Leave</button>
-        </div>
-        <table>
-          <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th class="num">Days</th><th>Notes</th><th></th></tr></thead>
-          <tbody>
-            ${records.map(r=>{
-              const emp = empById(r.employeeId);
-              return `<tr>
-                <td>${esc(emp?.name || 'Unknown')}</td>
-                <td><span class="pill pill-steel">${esc(LEAVE_TYPES[r.type]||r.type)}</span></td>
-                <td>${esc(r.startDate)}</td><td>${esc(r.endDate)}</td>
-                <td class="num">${r.days}</td>
-                <td style="font-size:12px;color:var(--ink-soft);">${esc(r.notes||'')}</td>
-                <td style="text-align:right;"><button class="btn btn-danger btn-sm" data-del-leave="${r.id}">Delete</button></td>
-              </tr>`;
-            }).join('') || `<tr><td colspan="7" style="text-align:center;color:var(--ink-soft);padding:24px;">No leave captured yet.</td></tr>`}
-          </tbody>
-        </table>
-      </div>
-    `;
-    $("#add-leave").addEventListener("click", ()=>this.openForm());
-    $$("[data-del-leave]", view()).forEach(b=>b.addEventListener("click", async ()=>{
-      if(!confirm("Delete this leave record? Balances will not be automatically restored.")) return;
-      await deleteDoc(doc(db,"leave", b.dataset.delLeave));
-      toast("Leave record deleted.");
-      await Leave.render();
-    }));
-  },
-  openForm(){
-    const active = State.employees.filter(e=>e.active!==false);
-    openModal(`
-      <h3>Capture Leave</h3>
-      <div class="field"><label>Employee</label>
-        <select id="lv-emp">${active.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}</select>
-      </div>
-      <div class="grid cols-2">
-        <div class="field"><label>Type</label>
-          <select id="lv-type">
-            <option value="annual">Annual</option>
-            <option value="sick">Sick</option>
-            <option value="familyResponsibility">Family Responsibility</option>
-          </select>
-        </div>
-        <div class="field"><label>Days</label><input type="number" step="0.5" id="lv-days" value="1"></div>
-        <div class="field"><label>From</label><input type="date" id="lv-from" value="${todayISO()}"></div>
-        <div class="field"><label>To</label><input type="date" id="lv-to" value="${todayISO()}"></div>
-      </div>
-      <div class="field"><label>Notes</label><textarea id="lv-notes" rows="2"></textarea></div>
-      <p style="font-size:12px;color:var(--ink-soft);">Saving will deduct the days from the employee's leave balance.</p>
-      <div class="modal-actions">
-        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" id="save-leave">Save</button>
-      </div>
-    `);
-    $("#save-leave").addEventListener("click", async ()=>{
-      const employeeId = $("#lv-emp").value;
-      const type = $("#lv-type").value;
-      const days = Number($("#lv-days").value)||0;
-      const emp = empById(employeeId);
-      if(days<=0){ toast("Enter a valid number of days.", true); return; }
-      try{
-        await addDoc(col("leave"), {
-          employeeId, type, days,
-          startDate: $("#lv-from").value, endDate: $("#lv-to").value,
-          notes: $("#lv-notes").value.trim(), createdAt: serverTimestamp(),
-        });
-        const empRef = doc(db,"employees", employeeId);
-        const curBalance = emp.leaveBalances?.[type] ?? 0;
-        await updateDoc(empRef, { [`leaveBalances.${type}`]: Math.round((curBalance-days)*100)/100 });
-        toast("Leave captured and balance updated.");
-        closeModal();
-        await Leave.render();
-      }catch(e){ toast("Failed: "+e.message, true); }
-    });
-  }
-};
-window.Leave = Leave;
-
-// ------------------------------------------------------------
 // RUN PAYROLL
 // ------------------------------------------------------------
 const Payroll = {
-  period: currentPeriod(),
+  mode: 'fortnightly', // 'fortnightly' | 'monthly'
+  monthPeriod: currentPeriod(),
+  fortnightStart: null,
   selected: new Set(),
+  get period(){
+    return this.mode==='fortnightly'
+      ? Period.idFor('fortnightly', {start: this.fortnightStart || Period.defaultFortnightStart()})
+      : Period.idFor('monthly', {month: this.monthPeriod});
+  },
   async render(){
+    if(!this.fortnightStart) this.fortnightStart = Period.defaultFortnightStart();
     await loadEmployees();
-    const active = State.employees.filter(e=>e.active!==false);
+    const active = State.employees.filter(e=>e.active!==false && (e.payFrequency||'monthly')===this.mode);
     if(this.selected.size===0) active.forEach(e=>this.selected.add(e.id));
     const preview = [];
     for(const emp of active){
       const tsSnap = await getDoc(doc(db,"timesheets", `${emp.id}_${this.period}`));
       const ts = tsSnap.exists() ? tsSnap.data() : {};
-      const earn = computeEarnings(emp, ts);
-      const paye = calcMonthlyPAYE(earn.gross, emp.ageBand);
-      const uif = calcUIF(earn.gross);
+      const earn = computeEarnings(emp, ts, this.mode);
       const otherDed = Number(ts.otherDeductions)||0;
-      const totalDed = paye+uif+otherDed;
+      const totalDed = otherDed;
       const net = Math.max(0, earn.gross-totalDed);
-      preview.push({emp, ts, earn, paye, uif, otherDed, totalDed, net, hasTs: tsSnap.exists()});
+      preview.push({emp, ts, earn, otherDed, totalDed, net, hasTs: tsSnap.exists()});
     }
     const totalGross = preview.filter(p=>this.selected.has(p.emp.id)).reduce((s,p)=>s+p.earn.gross,0);
     const totalNet = preview.filter(p=>this.selected.has(p.emp.id)).reduce((s,p)=>s+p.net,0);
 
     view().innerHTML = `
       <div class="card">
-        <p style="font-size:12px;color:var(--ink-soft);margin-top:0;">
-          PAYE and UIF are estimated using SARS's ${esc(TAX_YEAR_LABEL)} tables. This is a simplified small-business
-          estimate — please reconcile against SARS's official deduction tables (or your accountant) before submitting to SARS.
-        </p>
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+          <button class="btn ${this.mode==='fortnightly'?'btn-primary':'btn-outline'} btn-sm" data-mode="fortnightly">Fortnightly Staff (directors &amp; casual)</button>
+          <button class="btn ${this.mode==='monthly'?'btn-primary':'btn-outline'} btn-sm" data-mode="monthly">Monthly Staff (salaried)</button>
+        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-          <h3 style="margin:0;">Payroll Preview — ${esc(monthLabel(this.period))}</h3>
-          <input type="month" id="pr-period" value="${this.period}" style="width:auto;">
+          <h3 style="margin:0;">Payroll Preview — ${esc(Period.label(this.period))}</h3>
+          ${this.mode==='fortnightly'
+            ? `<div style="display:flex;align-items:center;gap:8px;">
+                 <label style="margin:0;">Fortnight starts</label>
+                 <input type="date" id="pr-fn-start" value="${this.fortnightStart}" style="width:auto;">
+               </div>`
+            : `<input type="month" id="pr-period" value="${this.monthPeriod}" style="width:auto;">`}
         </div>
         <table>
           <thead><tr>
             <th><input type="checkbox" id="chk-all"></th><th>Employee</th><th class="num">Gross</th>
-            <th class="num">PAYE</th><th class="num">UIF</th><th class="num">Other Ded.</th><th class="num">Net Pay</th><th>Timesheet</th>
+            <th class="num">Other Ded.</th><th class="num">Net Pay</th><th>Timesheet</th>
           </tr></thead>
           <tbody>
             ${preview.map(p=>`
@@ -695,13 +650,11 @@ const Payroll = {
                 <td><input type="checkbox" class="pr-chk" data-id="${p.emp.id}" ${this.selected.has(p.emp.id)?'checked':''}></td>
                 <td>${esc(p.emp.name)} <span class="mono" style="color:var(--ink-soft);font-size:11px;">${esc(p.emp.empNo)}</span></td>
                 <td class="num">${R(p.earn.gross)}</td>
-                <td class="num">${R(p.paye)}</td>
-                <td class="num">${R(p.uif)}</td>
                 <td class="num">${R(p.otherDed)}</td>
                 <td class="num" style="font-weight:700;">${R(p.net)}</td>
                 <td>${p.hasTs ? '<span class="pill pill-ok">Captured</span>' : '<span class="pill pill-warn">Missing (using 0)</span>'}</td>
               </tr>
-            `).join('') || `<tr><td colspan="8" style="text-align:center;color:var(--ink-soft);padding:24px;">No active employees.</td></tr>`}
+            `).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--ink-soft);padding:24px;">No active ${this.mode} employees for this cycle.</td></tr>`}
           </tbody>
         </table>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;flex-wrap:wrap;gap:12px;">
@@ -712,7 +665,12 @@ const Payroll = {
         </div>
       </div>
     `;
-    $("#pr-period").addEventListener("change", (e)=>{ this.period=e.target.value; this.render(); });
+    $$("[data-mode]", view()).forEach(b=>b.addEventListener("click", ()=>{ this.mode=b.dataset.mode; this.selected.clear(); this.render(); }));
+    if(this.mode==='fortnightly'){
+      $("#pr-fn-start").addEventListener("change", (e)=>{ this.fortnightStart=e.target.value; this.render(); });
+    } else {
+      $("#pr-period").addEventListener("change", (e)=>{ this.monthPeriod=e.target.value; this.render(); });
+    }
     $("#chk-all").addEventListener("change", (e)=>{
       if(e.target.checked) active.forEach(a=>this.selected.add(a.id));
       else this.selected.clear();
@@ -726,24 +684,24 @@ const Payroll = {
   },
   async runPayroll(items){
     if(items.length===0){ toast("Select at least one employee.", true); return; }
-    if(!confirm(`Generate ${items.length} payslip(s) for ${monthLabel(this.period)}? This will overwrite any existing payslips for these employees this period.`)) return;
+    const periodId = this.period;
+    if(!confirm(`Generate ${items.length} payslip(s) for ${Period.label(periodId)}? This will overwrite any existing payslips for these employees this period.`)) return;
     let count=0;
     for(const p of items){
-      const payslipNumber = await nextSequence(`payslips_${this.period}`, `DPC-${this.period}`, 4);
+      const payslipNumber = await nextSequence(`payslips_${periodId}`, `DPC-${periodId}`, 4);
       const payload = {
         payslipNumber,
         employeeId: p.emp.id, employeeName: p.emp.name, empNo: p.emp.empNo, position: p.emp.position||'',
-        period: this.period, payDate: todayISO(),
+        period: periodId, payFrequency: this.mode, payDate: todayISO(),
         payType: p.emp.payType, rate: p.emp.rate,
         earnings: { normalPay:p.earn.normalPay, otPay:p.earn.otPay, sundayPay:p.earn.sundayPay, allowances:p.earn.allowances, bonuses:p.earn.bonuses, unpaidDeduction:p.earn.unpaidDeduction, gross:p.earn.gross },
-        deductions: { paye:p.paye, uif:p.uif, other:p.otherDed, total:p.totalDed },
+        deductions: { other:p.otherDed, total:p.totalDed },
         netPay: p.net,
-        leaveBalancesSnapshot: p.emp.leaveBalances || {},
         bankSnapshot: { bankName:p.emp.bankName||'', accountType:p.emp.accountType||'', bankAccountNo:p.emp.bankAccountNo||'', branchCode:p.emp.branchCode||'' },
         companySnapshot: {...State.company},
         createdAt: serverTimestamp(),
       };
-      await setDoc(doc(db,"payslips", `${p.emp.id}_${this.period}`), payload);
+      await setDoc(doc(db,"payslips", `${p.emp.id}_${periodId}`), payload);
       count++;
     }
     toast(`${count} payslip(s) generated.`);
@@ -756,8 +714,16 @@ window.Payroll = Payroll;
 // PAYSLIPS (view / print / QR)
 // ------------------------------------------------------------
 const Payslips = {
-  period: currentPeriod(),
+  mode: 'fortnightly',
+  monthPeriod: currentPeriod(),
+  fortnightStart: null,
+  get period(){
+    return this.mode==='fortnightly'
+      ? Period.idFor('fortnightly', {start: this.fortnightStart || Period.defaultFortnightStart()})
+      : Period.idFor('monthly', {month: this.monthPeriod});
+  },
   async render(){
+    if(!this.fortnightStart) this.fortnightStart = Period.defaultFortnightStart();
     let rows = [];
     try{
       const q = query(col("payslips"), where("period","==",this.period));
@@ -766,9 +732,18 @@ const Payslips = {
     rows.sort((a,b)=> (a.empNo||'').localeCompare(b.empNo||''));
     view().innerHTML = `
       <div class="card">
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+          <button class="btn ${this.mode==='fortnightly'?'btn-primary':'btn-outline'} btn-sm" data-mode="fortnightly">Fortnightly Staff</button>
+          <button class="btn ${this.mode==='monthly'?'btn-primary':'btn-outline'} btn-sm" data-mode="monthly">Monthly Staff</button>
+        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-          <h3 style="margin:0;">Payslips — ${esc(monthLabel(this.period))}</h3>
-          <input type="month" id="ps-period" value="${this.period}" style="width:auto;">
+          <h3 style="margin:0;">Payslips — ${esc(Period.label(this.period))}</h3>
+          ${this.mode==='fortnightly'
+            ? `<div style="display:flex;align-items:center;gap:8px;">
+                 <label style="margin:0;">Fortnight starts</label>
+                 <input type="date" id="ps-fn-start" value="${this.fortnightStart}" style="width:auto;">
+               </div>`
+            : `<input type="month" id="ps-period" value="${this.monthPeriod}" style="width:auto;">`}
         </div>
         <table>
           <thead><tr><th>Payslip #</th><th>Employee</th><th class="num">Gross</th><th class="num">Deductions</th><th class="num">Net Pay</th><th></th></tr></thead>
@@ -788,7 +763,12 @@ const Payslips = {
       </div>
       <div id="ps-detail"></div>
     `;
-    $("#ps-period").addEventListener("change",(e)=>{ this.period=e.target.value; this.render(); });
+    $$("[data-mode]", view()).forEach(b=>b.addEventListener("click", ()=>{ this.mode=b.dataset.mode; this.render(); }));
+    if(this.mode==='fortnightly'){
+      $("#ps-fn-start").addEventListener("change",(e)=>{ this.fortnightStart=e.target.value; this.render(); });
+    } else {
+      $("#ps-period").addEventListener("change",(e)=>{ this.monthPeriod=e.target.value; this.render(); });
+    }
     $$("[data-view-ps]", view()).forEach(b=>b.addEventListener("click", ()=>this.showPayslip(b.dataset.viewPs)));
   },
   async showPayslip(id){
@@ -819,7 +799,7 @@ const Payslips = {
             </div>
             <div style="text-align:right;">
               <div class="num" style="font-size:12px;">Payslip #: <span class="mono">${esc(p.payslipNumber)}</span></div>
-              <div style="font-size:12px;color:var(--ink-soft);">Pay Period: ${esc(monthLabel(p.period))} · Pay Date: ${esc(p.payDate)}</div>
+              <div style="font-size:12px;color:var(--ink-soft);">Pay Period: ${esc(Period.label(p.period))} · Pay Date: ${esc(p.payDate)}</div>
             </div>
           </div>
 
@@ -836,17 +816,8 @@ const Payslips = {
 
           <div class="payslip-section">
             <h4>Deductions</h4>
-            <div class="payslip-row"><span>PAYE</span><span class="mono">${R(p.deductions.paye)}</span></div>
-            <div class="payslip-row"><span>UIF</span><span class="mono">${R(p.deductions.uif)}</span></div>
             <div class="payslip-row"><span>Other Deductions</span><span class="mono">${R(p.deductions.other)}</span></div>
             <div class="payslip-row total"><span>Total Deductions</span><span class="mono">${R(p.deductions.total)}</span></div>
-          </div>
-
-          <div class="payslip-section">
-            <h4>Leave Balances</h4>
-            <div class="payslip-row"><span>Annual</span><span class="mono">${p.leaveBalancesSnapshot?.annual ?? 0} days</span></div>
-            <div class="payslip-row"><span>Sick</span><span class="mono">${p.leaveBalancesSnapshot?.sick ?? 0} days</span></div>
-            <div class="payslip-row"><span>Family Responsibility</span><span class="mono">${p.leaveBalancesSnapshot?.familyResponsibility ?? 0} days</span></div>
           </div>
 
           <div class="payslip-net">
@@ -868,7 +839,7 @@ const Payslips = {
     setTimeout(()=>{
       const el = document.getElementById(qrId);
       if(el && window.QRCode){
-        const payload = `DPC PAYSLIP\n${p.payslipNumber}\n${p.employeeName}\n${monthLabel(p.period)}\nNet: R${(p.netPay||0).toFixed(2)}`;
+        const payload = `DPC PAYSLIP\n${p.payslipNumber}\n${p.employeeName}\n${Period.label(p.period)}\nNet: R${(p.netPay||0).toFixed(2)}`;
         QRCode.toCanvas(document.createElement("canvas"), payload, {width:88, margin:0}, (err, canvas)=>{
           if(!err){ el.innerHTML=""; el.appendChild(canvas); }
         });
@@ -883,8 +854,16 @@ window.Router = Router;
 // PAYROLL SUMMARY / REPORTS
 // ------------------------------------------------------------
 const Reports = {
-  period: currentPeriod(),
+  mode: 'fortnightly',
+  monthPeriod: currentPeriod(),
+  fortnightStart: null,
+  get period(){
+    return this.mode==='fortnightly'
+      ? Period.idFor('fortnightly', {start: this.fortnightStart || Period.defaultFortnightStart()})
+      : Period.idFor('monthly', {month: this.monthPeriod});
+  },
   async render(){
+    if(!this.fortnightStart) this.fortnightStart = Period.defaultFortnightStart();
     let rows = [];
     try{
       const q = query(col("payslips"), where("period","==",this.period));
@@ -893,52 +872,61 @@ const Reports = {
     rows.sort((a,b)=> (a.empNo||'').localeCompare(b.empNo||''));
     const totals = rows.reduce((acc,r)=>{
       acc.gross += r.earnings?.gross||0;
-      acc.paye += r.deductions?.paye||0;
-      acc.uif += r.deductions?.uif||0;
       acc.other += r.deductions?.other||0;
       acc.net += r.netPay||0;
       return acc;
-    }, {gross:0,paye:0,uif:0,other:0,net:0});
+    }, {gross:0,other:0,net:0});
 
     view().innerHTML = `
       <div class="card">
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+          <button class="btn ${this.mode==='fortnightly'?'btn-primary':'btn-outline'} btn-sm" data-mode="fortnightly">Fortnightly Staff</button>
+          <button class="btn ${this.mode==='monthly'?'btn-primary':'btn-outline'} btn-sm" data-mode="monthly">Monthly Staff</button>
+        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-          <h3 style="margin:0;">Payroll Summary — ${esc(monthLabel(this.period))}</h3>
-          <div style="display:flex;gap:10px;">
-            <input type="month" id="rp-period" value="${this.period}" style="width:auto;">
+          <h3 style="margin:0;">Payroll Summary — ${esc(Period.label(this.period))}</h3>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            ${this.mode==='fortnightly'
+              ? `<label style="margin:0;">Fortnight starts</label><input type="date" id="rp-fn-start" value="${this.fortnightStart}" style="width:auto;">`
+              : `<input type="month" id="rp-period" value="${this.monthPeriod}" style="width:auto;">`}
             <button class="btn btn-outline" id="rp-csv">Export CSV</button>
             <button class="btn btn-dark" onclick="window.print()">Print</button>
           </div>
         </div>
         <table>
           <thead><tr>
-            <th>Emp No.</th><th>Employee</th><th class="num">Gross</th><th class="num">PAYE</th>
-            <th class="num">UIF</th><th class="num">Other Ded.</th><th class="num">Net Pay</th>
+            <th>Emp No.</th><th>Employee</th><th class="num">Gross</th>
+            <th class="num">Other Ded.</th><th class="num">Net Pay</th>
           </tr></thead>
           <tbody>
             ${rows.map(r=>`
               <tr>
                 <td class="mono">${esc(r.empNo)}</td><td>${esc(r.employeeName)}</td>
-                <td class="num">${R(r.earnings?.gross)}</td><td class="num">${R(r.deductions?.paye)}</td>
-                <td class="num">${R(r.deductions?.uif)}</td><td class="num">${R(r.deductions?.other)}</td>
+                <td class="num">${R(r.earnings?.gross)}</td>
+                <td class="num">${R(r.deductions?.other)}</td>
                 <td class="num" style="font-weight:700;">${R(r.netPay)}</td>
               </tr>
-            `).join('') || `<tr><td colspan="7" style="text-align:center;color:var(--ink-soft);padding:24px;">No payslips for this period yet.</td></tr>`}
+            `).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--ink-soft);padding:24px;">No payslips for this period yet.</td></tr>`}
           </tbody>
           <tfoot>
             <tr style="font-weight:700;background:#FAF8F3;">
               <td colspan="2">Totals</td>
-              <td class="num">${R(totals.gross)}</td><td class="num">${R(totals.paye)}</td>
-              <td class="num">${R(totals.uif)}</td><td class="num">${R(totals.other)}</td><td class="num">${R(totals.net)}</td>
+              <td class="num">${R(totals.gross)}</td>
+              <td class="num">${R(totals.other)}</td><td class="num">${R(totals.net)}</td>
             </tr>
           </tfoot>
         </table>
       </div>
     `;
-    $("#rp-period").addEventListener("change",(e)=>{ this.period=e.target.value; this.render(); });
+    $$("[data-mode]", view()).forEach(b=>b.addEventListener("click", ()=>{ this.mode=b.dataset.mode; this.render(); }));
+    if(this.mode==='fortnightly'){
+      $("#rp-fn-start").addEventListener("change",(e)=>{ this.fortnightStart=e.target.value; this.render(); });
+    } else {
+      $("#rp-period").addEventListener("change",(e)=>{ this.monthPeriod=e.target.value; this.render(); });
+    }
     $("#rp-csv").addEventListener("click", ()=>{
-      const header = ["Emp No","Employee","Gross","PAYE","UIF","Other Deductions","Net Pay"];
-      const lines = rows.map(r=>[r.empNo, r.employeeName, r.earnings?.gross||0, r.deductions?.paye||0, r.deductions?.uif||0, r.deductions?.other||0, r.netPay||0].join(","));
+      const header = ["Emp No","Employee","Gross","Other Deductions","Net Pay"];
+      const lines = rows.map(r=>[r.empNo, r.employeeName, r.earnings?.gross||0, r.deductions?.other||0, r.netPay||0].join(","));
       const csv = [header.join(","), ...lines].join("\n");
       const blob = new Blob([csv], {type:"text/csv"});
       const a = document.createElement("a");
@@ -978,9 +966,9 @@ const Settings = {
         <h3>About This System</h3>
         <p style="font-size:13px;color:var(--ink-soft);line-height:1.6;">
           Built for DP Construction Group. Data is stored in your own Firebase project (Firestore), and this page is
-          static — you can host it for free on GitHub Pages. PAYE/UIF figures use the ${esc(TAX_YEAR_LABEL)} SARS tables
-          as a simplified small-business estimate; always confirm exact figures with SARS or your accountant before
-          filing returns.
+          static — you can host it for free on GitHub Pages. This system calculates gross pay and net pay (gross minus
+          any "Other Deductions" you enter) — it does not calculate PAYE, UIF, or any other statutory deductions, and
+          does not track leave/sick balances.
         </p>
       </div>
     `;
