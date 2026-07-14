@@ -1,9 +1,9 @@
 # DP Construction Group — Payroll & HR System
 
-A free, self-hosted payroll pack: employee register, timesheets, leave
-register, payroll runs, branded payslips (with QR code), and payroll
-summaries — running entirely from a static webpage on GitHub Pages, with
-Firebase as the database. No monthly software fee.
+A free, self-hosted payroll pack: employee register, timesheets, payroll
+runs, branded payslips (with QR code), and payroll summaries — running
+entirely from a static webpage on GitHub Pages, with Firebase as the
+database. No monthly software fee.
 
 **Files in this folder:**
 - `index.html` — the app itself (open this in a browser once deployed)
@@ -95,38 +95,52 @@ too).
 - **Company Settings** — enter DP Construction Group's details and
   upload a logo (shown on every payslip).
 - **Employees** — add each worker: name, ID number, position, pay type
-  (hourly / daily / fixed monthly), rate, banking details, and starting
-  leave balances.
-- **Timesheets** — each pay period, capture hours/days worked, overtime
-  (paid at 1.5×), Sunday/public holiday hours (paid at 2×), allowances,
-  bonuses, and any other deductions per employee.
-- **Leave Register** — capture approved leave; balances are deducted
-  automatically.
-- **Run Payroll** — pick the pay period, review the calculated PAYE, UIF
-  and net pay for each employee, then generate payslips.
-- **Payslips** — view, print, or save any payslip as a PDF (each has a
-  unique payslip number and QR code).
-- **Payroll Summary** — a totals table per period, exportable to CSV for
-  your accounting records or SARS/EMP201 filing.
+  (hourly / daily / fixed monthly), **pay frequency** (Fortnightly or
+  Monthly), rate, and banking details.
+  - Set **directors and casual/site staff** to **Fortnightly** — they're
+    paid every two weeks for the days/hours they worked.
+  - Set **salaried staff (e.g. the bookkeeper)** to **Monthly**.
+- **Timesheets** — has two tabs, **Fortnightly Staff** and **Monthly
+  Staff**. Pick the tab, then the period (a start date for a fortnight,
+  or a calendar month), and capture hours/days, overtime (×1.5),
+  Sunday/public holiday hours (×2), allowances, bonuses and any other
+  deductions for each employee in that group.
+- **Run Payroll** — same two tabs (Fortnightly/Monthly). Pick the period,
+  review gross pay, other deductions and net pay for each employee in
+  that group, then generate payslips. Run it twice a month for the
+  fortnightly group and once a month for the monthly group.
+- **Payslips** — same two tabs; view, print, or save any payslip as a
+  PDF (each has a unique payslip number and QR code).
+- **Payroll Summary** — same two tabs; a totals table per period,
+  exportable to CSV for your accounting records.
 
-### About the tax calculations
+### About the fortnight date picker
 
-PAYE is estimated using SARS's **2026/2027 tax year** brackets and
-primary/secondary/tertiary rebates (1 March 2026 – 28 February 2027),
-and UIF is calculated at 1% of remuneration capped at R177.12/month. This
-is a simplified, good-faith monthly estimate suitable for day-to-day
-payslip generation — it doesn't yet account for things like medical aid
-tax credits or retirement fund contributions. Before submitting EMP201/
-EMP501 returns to SARS, reconcile the figures against SARS's official
-tax deduction tables, or have your accountant/tax practitioner check
-them.
+A "fortnight" here is any 14-day run you choose — pick the **start date**
+of the pay cycle you're running (e.g. the 1st, or a Monday) and the
+system automatically works out the 14-day period from there and labels
+it clearly on-screen and on the payslip. There's no fixed calendar
+alignment required, so it'll match whatever cycle DP Construction Group
+actually pays on.
+
+### What this system does — and doesn't — calculate
+
+Net pay = gross pay (normal + overtime + Sunday/PH + allowances +
+bonuses, minus any unpaid-leave deduction for monthly staff) minus
+whatever you type into "Other Deductions" on the timesheet. **It does
+not calculate PAYE, UIF, or any other statutory deduction**, and it does
+not track leave or sick-leave balances — those were intentionally left
+out for now. If you need PAYE/UIF or leave tracking added back in later,
+just ask.
 
 ---
 
 ## Ideas for later (just ask if you want any of these added)
 
+- PAYE and UIF calculations (SARS tax tables)
+- Leave/sick day register with balances
 - Overtime at different rates for public holidays vs Sundays
-- Medical aid and retirement fund deduction fields (with tax credit)
+- Medical aid and retirement fund deduction fields
 - Multiple company branches/sites
 - Emailing payslips directly to employees
 - Firebase Hosting instead of GitHub Pages (keeps everything in one place)
